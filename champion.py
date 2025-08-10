@@ -53,6 +53,19 @@ def load_model_and_objects():
   return model, champion_encoder, scaler, matchup_df, numeric_cols
 
 def get_counters_for_champion(champion_name, top_n=None):
+  """
+  Este endpoint especifica qué tan probable es que `champion_name` muera por los campeones retornados.
+
+  Args:
+    champion_name (str): Nombre del campeón para el cual se buscan los counters.
+    top_n (int, optional): Número máximo de campeones a retornar. Si es None, retorna todos.
+
+  Returns:
+    list of tuples: Lista de tuplas (nombre_del_campeón, probabilidad) ordenadas por probabilidad descendente.
+
+  Raises:
+    ValueError: Si el nombre del campeón no está en el codificador.
+  """
   model, champion_encoder, scaler, matchup_df, numeric_cols = load_model_and_objects()
   if champion_name not in champion_encoder.classes_:
     raise ValueError(f"'{champion_name}' no está en el codificador.")
