@@ -1,1 +1,7 @@
 fastapi[standard]
+gunicorn
+uvicorn
+torch
+joblib
+pandas
+scikit-learn
