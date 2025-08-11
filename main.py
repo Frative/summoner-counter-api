@@ -19,7 +19,6 @@ def get_team_counters(
     team_a: list[str] = Query(..., description="Lista de campeones del equipo A"),
     team_b: list[str] = Query(..., description="Lista de campeones del equipo B")
 ):
-    print(team_a, team_b)
     if len(team_a) != 5 or len(team_b) != 5:
         return {"error": "Cada equipo debe tener exactamente 5 campeones."}
     matrix = team.predict_team_matchup(team_a, team_b)
