@@ -1,6 +1,6 @@
-from typing import Union
-
-from fastapi import FastAPI
+from fastapi import FastAPI, Query, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+import champion, team
 
 import champion
 import team
@@ -8,6 +8,13 @@ from fastapi import Query
 
 app = FastAPI()
 
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # o ["*"] si te da igual
+    allow_credentials=True,
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
 
 @app.get("/champion/{champion_name}/counters")
 def get_counters(champion_name: str):
