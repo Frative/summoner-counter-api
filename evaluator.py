@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 import model
 
 @torch.no_grad()
-def evaluate(threshold=0.5, antisymmetry=True, min_encounters=1, include_ties=False, save_csv=None, plot=False, batch_size=4096):
+def evaluate(threshold=0.99, antisymmetry=True, min_encounters=1, include_ties=False, save_csv=None, plot=False, batch_size=4096):
     
     _model, champion_encoder, scaler, matchup_df, numeric_cols = model.load_model_and_objects()
     _model.eval()
@@ -23,7 +23,7 @@ def evaluate(threshold=0.5, antisymmetry=True, min_encounters=1, include_ties=Fa
     df = df[df['total_encounters'].astype(float) >= float(min_encounters)]
     # omitir empates si no se piden
     if not include_ties:
-        df = df[np.abs(df['win_ratio'].astype(float) - 0.5) > 1e-6]
+        df = df[np.abs(df['win_ratio'].astype(float) - 0.9) > 1e-6]
 
     # Si no hay datos tras el filtro, salir temprano
     if df.empty:
