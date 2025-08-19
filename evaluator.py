@@ -1,42 +1,155 @@
-import torch
+#!/usr/bin/env python3
+"""
+Calcula matriz de confusión del modelo usando matchup_summary.csv como ground truth.
+Etiqueta real: y=1 si win_ratio>0.5 (A es counter de B), y=0 si win_ratio<0.5.
+Empates (==0.5) se omiten por defecto.
+Predicción: p(A>B) con antisymmetry opcional: 0.5*(P(A>B) + 1 - P(B>A)).
+"""
+import argparse
+import numpy as np
 import pandas as pd
+import torch
+from sklearn.metrics import confusion_matrix, classification_report, ConfusionMatrixDisplay
 import matplotlib.pyplot as plt
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+
 import model
 
-class Evaluator:
-    def __init__(self):
-        self._model, self.champion_encoder, self.scaler, self.matchup_df, self.numeric_cols = model.load_model_and_objects()
+@torch.no_grad()
+def evaluate(threshold=0.5, antisymmetry=True, min_encounters=1, include_ties=False, save_csv=None, plot=False, batch_size=4096):
+    # Cargar artefactos
+    _model, champion_encoder, scaler, matchup_df, numeric_cols = model.load_model_and_objects()
+    _model.eval()
 
-    def plot_confusion_matrix(self, threshold=0.5, output_file="confusion_matrix.png"):
-        # Features y etiquetas
-        X = self.matchup_df[['champ_a_encoded', 'champ_b_encoded'] + self.numeric_cols].copy()
+    # ------------------------
+    # 1) Filtrado y etiquetas reales
+    # ------------------------
+    df = matchup_df.copy()
+    # excluir espejos perfectos (mismo campeón contra sí mismo)
+    df = df[df['champ_a'] != df['champ_b']]
+    # mínimo de partidas
+    df = df[df['total_encounters'].astype(float) >= float(min_encounters)]
+    # omitir empates si no se piden
+    if not include_ties:
+        df = df[np.abs(df['win_ratio'].astype(float) - 0.5) > 1e-6]
 
-        # Convertir win_ratio a etiquetas binarias
-        y_true = (self.matchup_df['win_ratio'] > 0.5).astype(int).values  
+    # Si no hay datos tras el filtro, salir temprano
+    if df.empty:
+        print("Sin pares válidos tras el filtrado.")
+        return
 
-        # Normalizar
-        X[self.numeric_cols] = self.scaler.transform(X[self.numeric_cols])
-        inputs = torch.tensor(X.values, dtype=torch.float32).to(model.device)
+    y_true = (df['win_ratio'].astype(float).values > 0.5).astype(int)
 
-        # Predicciones
-        with torch.no_grad():
-            y_pred_probs = self._model(inputs).cpu().numpy().flatten()
+    # ------------------------
+    # 2) Construcción de features en bloque
+    # ------------------------
+    # AB (A vs B)
+    a_enc = df['champ_a_encoded'].astype(np.int64).values
+    b_enc = df['champ_b_encoded'].astype(np.int64).values
 
-        y_pred = (y_pred_probs > threshold).astype(int)
+    num_ab = df[numeric_cols].astype(float).fillna(0.0).values
+    num_ab = scaler.transform(num_ab)
 
-        # Matriz de confusión
-        cm = confusion_matrix(y_true, y_pred)
-        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=[0, 1])
-        disp.plot(cmap="Blues")
-        plt.title("Matriz de Confusión del Modelo")
+    # Tensor AB: [a_idx, b_idx, features...]
+    X_ab = np.concatenate([
+        a_enc.reshape(-1,1).astype(np.float32),
+        b_enc.reshape(-1,1).astype(np.float32),
+        num_ab.astype(np.float32)
+    ], axis=1)
 
-        # Guardar como imagen
-        plt.savefig(output_file)
-        plt.close()
-        print(f"✅ Matriz de confusión guardada en {output_file}")
+    # ------------------------
+    # 3) Predicción en lotes
+    # ------------------------
+    def infer_in_batches(X: np.ndarray) -> np.ndarray:
+        probs = np.empty((X.shape[0],), dtype=np.float32)
+        for start in range(0, X.shape[0], batch_size):
+            end = min(start + batch_size, X.shape[0])
+            xb = torch.tensor(X[start:end], dtype=torch.float32, device=model.device)
+            pb = torch.sigmoid(_model(xb)).squeeze(1).detach().cpu().numpy().astype(np.float32)
+            probs[start:end] = pb
+        return probs
 
+    p_ab = infer_in_batches(X_ab)
 
-if __name__ == "__main__":
-    e = Evaluator()
-    e.plot_confusion_matrix(output_file="confusion_matrix.png")
+    # ------------------------
+    # 4) Antisimetría opcional: construir BA y combinar
+    # ------------------------
+    if antisymmetry:
+        # Construir BA agregando a un solo registro por par (champ_b, champ_a)
+        rev = matchup_df[['champ_a_encoded','champ_b_encoded'] + numeric_cols].copy()
+        # Después de renombrar, cada fila representa (B,A)
+        rev = rev.rename(columns={'champ_a_encoded':'champ_b_encoded', 'champ_b_encoded':'champ_a_encoded'})
+        # Promediar numéricos por par BA para evitar duplicados que rompen la dimensionalidad
+        rev_grouped = (
+            rev.groupby(['champ_a_encoded','champ_b_encoded'], as_index=False)[numeric_cols]
+               .mean()
+        )
+        # Alinear exactamente con df (AB). df tiene columnas (a_enc,b_enc) ya con el orden deseado
+        merged = df[['champ_a_encoded','champ_b_encoded']].merge(
+            rev_grouped,
+            on=['champ_a_encoded','champ_b_encoded'],
+            how='left'
+        )
+        num_ba = merged[numeric_cols].astype(float).fillna(0.0).values
+        num_ba = scaler.transform(num_ba)
+
+        # Encoders invertidos para BA
+        X_ba = np.concatenate([
+            b_enc.reshape(-1,1).astype(np.float32),
+            a_enc.reshape(-1,1).astype(np.float32),
+            num_ba.astype(np.float32)
+        ], axis=1)
+
+        p_ba = infer_in_batches(X_ba)
+        p = 0.5 * (p_ab + (1.0 - p_ba))
+    else:
+        p = p_ab
+
+    # ------------------------
+    # 5) Umbral y métricas
+    # ------------------------
+    y_pred = (p >= float(threshold)).astype(int)
+
+    cm = confusion_matrix(y_true, y_pred)
+    print("Matriz de Confusión:")
+    print(cm)
+    print("\nReporte de Clasificación:")
+    print(classification_report(y_true, y_pred, digits=3))
+
+    # ------------------------
+    # 6) Salida opcional a CSV
+    # ------------------------
+    if save_csv:
+        out = df[['champ_a','champ_b']].copy()
+        out['y_true'] = y_true
+        out['p_pred'] = p
+        out['y_pred'] = y_pred
+        out.to_csv(save_csv, index=False)
+        print(f"Predicciones guardadas en {save_csv}")
+
+    # ------------------------
+    # 7) Plot opcional
+    # ------------------------
+    if plot:
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["Neg","Pos"])
+        disp.plot(cmap="Blues", values_format="d")
+        plt.title("Matriz de Confusión")
+        plt.show()
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--threshold', type=float, default=0.5, help='Umbral de clasificación para p(A>B)')
+    parser.add_argument('--min_encounters', type=int, default=3, help='Mínimo de partidas para considerar un par')
+    parser.add_argument('--include_ties', action='store_true', help='Incluir casos con win_ratio==0.5 como y=0')
+    parser.add_argument('--antisymmetry', action='store_true', help='Forzar antisimetría en inferencia')
+    parser.add_argument('--save_csv', default='', help='Ruta opcional para guardar predicciones detalladas')
+    parser.add_argument('--plot', action='store_true', help='Mostrar gráfico de matriz de confusión')
+    parser.add_argument('--batch_size', type=int, default=4096, help='Tamaño de lote para inferencia vectorizada')
+    args = parser.parse_args()
+
+    evaluate(threshold=args.threshold,
+             antisymmetry=args.antisymmetry,
+             min_encounters=args.min_encounters,
+             include_ties=args.include_ties,
+             save_csv=args.save_csv if args.save_csv else None,
+             plot=args.plot,
+             batch_size=args.batch_size)
