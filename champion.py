@@ -1,7 +1,7 @@
 import torch
 import pandas as pd
 
-import model  # importa el módulo de arriba (mismo paquete/proyecto)
+import model 
 
 @torch.no_grad()
 def _build_feature_row(df_sum: pd.DataFrame, scaler, numeric_cols, champ_a: str, champ_b: str,

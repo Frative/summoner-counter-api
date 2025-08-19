@@ -59,6 +59,5 @@ def predict_team_matchup(team_a: list[str], team_b: list[str], antisymmetry: boo
         X_ba = torch.tensor(pd.concat(rows_ba, ignore_index=True).values, dtype=torch.float32, device=model.device)
         logits_ba = _model(X_ba)
         p_ba = torch.sigmoid(logits_ba).cpu().numpy().reshape(5,5)
-        return 0.5 * (p_ab + (1.0 - p_ba.T))  # (Bj>Ai) traspuesta para alinear indices
-    else:
+        return 0.5 * (p_ab + (1.0 - p_ba.T)) 
         return p_ab

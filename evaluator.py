@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""
-Calcula matriz de confusión del modelo usando matchup_summary.csv como ground truth.
-Etiqueta real: y=1 si win_ratio>0.5 (A es counter de B), y=0 si win_ratio<0.5.
-Empates (==0.5) se omiten por defecto.
-Predicción: p(A>B) con antisymmetry opcional: 0.5*(P(A>B) + 1 - P(B>A)).
-"""
+
 import argparse
 import numpy as np
 import pandas as pd
@@ -16,13 +11,11 @@ import model
 
 @torch.no_grad()
 def evaluate(threshold=0.5, antisymmetry=True, min_encounters=1, include_ties=False, save_csv=None, plot=False, batch_size=4096):
-    # Cargar artefactos
+    
     _model, champion_encoder, scaler, matchup_df, numeric_cols = model.load_model_and_objects()
     _model.eval()
 
-    # ------------------------
-    # 1) Filtrado y etiquetas reales
-    # ------------------------
+
     df = matchup_df.copy()
     # excluir espejos perfectos (mismo campeón contra sí mismo)
     df = df[df['champ_a'] != df['champ_b']]
@@ -39,9 +32,7 @@ def evaluate(threshold=0.5, antisymmetry=True, min_encounters=1, include_ties=Fa
 
     y_true = (df['win_ratio'].astype(float).values > 0.5).astype(int)
 
-    # ------------------------
-    # 2) Construcción de features en bloque
-    # ------------------------
+
     # AB (A vs B)
     a_enc = df['champ_a_encoded'].astype(np.int64).values
     b_enc = df['champ_b_encoded'].astype(np.int64).values
@@ -49,16 +40,13 @@ def evaluate(threshold=0.5, antisymmetry=True, min_encounters=1, include_ties=Fa
     num_ab = df[numeric_cols].astype(float).fillna(0.0).values
     num_ab = scaler.transform(num_ab)
 
-    # Tensor AB: [a_idx, b_idx, features...]
     X_ab = np.concatenate([
         a_enc.reshape(-1,1).astype(np.float32),
         b_enc.reshape(-1,1).astype(np.float32),
         num_ab.astype(np.float32)
     ], axis=1)
 
-    # ------------------------
-    # 3) Predicción en lotes
-    # ------------------------
+
     def infer_in_batches(X: np.ndarray) -> np.ndarray:
         probs = np.empty((X.shape[0],), dtype=np.float32)
         for start in range(0, X.shape[0], batch_size):
@@ -70,9 +58,7 @@ def evaluate(threshold=0.5, antisymmetry=True, min_encounters=1, include_ties=Fa
 
     p_ab = infer_in_batches(X_ab)
 
-    # ------------------------
-    # 4) Antisimetría opcional: construir BA y combinar
-    # ------------------------
+
     if antisymmetry:
         # Construir BA agregando a un solo registro por par (champ_b, champ_a)
         rev = matchup_df[['champ_a_encoded','champ_b_encoded'] + numeric_cols].copy()
@@ -83,7 +69,6 @@ def evaluate(threshold=0.5, antisymmetry=True, min_encounters=1, include_ties=Fa
             rev.groupby(['champ_a_encoded','champ_b_encoded'], as_index=False)[numeric_cols]
                .mean()
         )
-        # Alinear exactamente con df (AB). df tiene columnas (a_enc,b_enc) ya con el orden deseado
         merged = df[['champ_a_encoded','champ_b_encoded']].merge(
             rev_grouped,
             on=['champ_a_encoded','champ_b_encoded'],
@@ -92,7 +77,6 @@ def evaluate(threshold=0.5, antisymmetry=True, min_encounters=1, include_ties=Fa
         num_ba = merged[numeric_cols].astype(float).fillna(0.0).values
         num_ba = scaler.transform(num_ba)
 
-        # Encoders invertidos para BA
         X_ba = np.concatenate([
             b_enc.reshape(-1,1).astype(np.float32),
             a_enc.reshape(-1,1).astype(np.float32),
@@ -104,9 +88,7 @@ def evaluate(threshold=0.5, antisymmetry=True, min_encounters=1, include_ties=Fa
     else:
         p = p_ab
 
-    # ------------------------
-    # 5) Umbral y métricas
-    # ------------------------
+
     y_pred = (p >= float(threshold)).astype(int)
 
     cm = confusion_matrix(y_true, y_pred)
@@ -115,9 +97,7 @@ def evaluate(threshold=0.5, antisymmetry=True, min_encounters=1, include_ties=Fa
     print("\nReporte de Clasificación:")
     print(classification_report(y_true, y_pred, digits=3))
 
-    # ------------------------
-    # 6) Salida opcional a CSV
-    # ------------------------
+
     if save_csv:
         out = df[['champ_a','champ_b']].copy()
         out['y_true'] = y_true
@@ -126,9 +106,7 @@ def evaluate(threshold=0.5, antisymmetry=True, min_encounters=1, include_ties=Fa
         out.to_csv(save_csv, index=False)
         print(f"Predicciones guardadas en {save_csv}")
 
-    # ------------------------
-    # 7) Plot opcional
-    # ------------------------
+  
     if plot:
         disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["Neg","Pos"])
         disp.plot(cmap="Blues", values_format="d")

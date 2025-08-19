@@ -9,7 +9,6 @@ ENCODER_FILE = "champion_encoder.joblib"
 SCALER_FILE = "scaler.joblib"
 DATA_SUMMARY_FILE = "matchup_summary.csv"
 
-# Debe coincidir con el script de entrenamiento
 NUMERIC_COLS = [
     'avg_phys_dmg_a','avg_magic_dmg_a','avg_true_dmg_a','avg_level_a',
     'avg_phys_dmg_b','avg_magic_dmg_b','avg_true_dmg_b','avg_level_b',
@@ -44,7 +43,7 @@ class CounterPredictor(nn.Module):
         z = self.act(self.fc1(z)); z = self.dropout(z)
         z = self.act(self.fc2(z)); z = self.dropout(z)
         z = self.act(self.fc3(z))
-        logits = self.out(z)          # BCEWithLogits -> devuelve logits
+        logits = self.out(z)          
         return logits
 
 
