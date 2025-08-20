@@ -1,0 +1,270 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Champion Counters Demo</title>
+  <!-- Tailwind CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    /* Smooth scaling for sprite icons */
+    .pixel-snap { image-rendering: pixelated; }
+    /* Slider base styling */
+    input[type="range"] { width: 100%; }
+  </style>
+  <!-- React + ReactDOM UMD -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <!-- Framer Motion UMD -->
+  <script src="https://unpkg.com/framer-motion@10.16.4/dist/framer-motion.umd.js"></script>
+</head>
+<body class="bg-white text-black">
+  <div id="root"></div>
+
+  <script>
+    ;(() => {
+      const { useState, useEffect, useMemo, useCallback } = React;
+      const { motion, AnimatePresence } = window.FramerMotion || {};
+
+      // --- Utilities ---
+      function debounce(fn, wait) {
+        let t; return (...args) => { clearTimeout(t); t = setTimeout(() => fn(...args), wait); };
+      }
+
+      /** Types reference (JS version):
+       * Pair = [string, number]
+       * ApiResponse = { counters: Pair[] }
+       */
+
+      const listVariants = {
+        hidden: { opacity: 0 },
+        show: { opacity: 1, transition: { staggerChildren: 0.012 } },
+      };
+      const itemVariants = { hidden: { opacity: 0, y: 6 }, show: { opacity: 1, y: 0 } };
+
+      const FALLBACK = { counters: [] };
+
+      function bucketize(data, high = 0.52, low = 0.48) {
+        const counters = [], neutrals = [], strongs = [];
+        for (const [name, score] of data) {
+          if (score >= high) counters.push([name, score]);
+          else if (score <= low) strongs.push([name, score]);
+          else neutrals.push([name, score]);
+        }
+        counters.sort((a,b)=>b[1]-a[1]);
+        neutrals.sort((a,b)=>b[1]-a[1]);
+        strongs.sort((a,b)=>a[1]-b[1]);
+        return { counters, neutrals, strongs };
+      }
+
+      // ---- DDragon integration ----
+      const DEFAULT_DD_BASE = 'https://ddragon.leagueoflegends.com/cdn';
+
+      function useDDragon() {
+        const [state, setState] = useState({ data: null, loading: true, error: null, version: null });
+        useEffect(() => {
+          let alive = true;
+          (async () => {
+            try {
+              // Get latest version first
+              const vr = await fetch('https://ddragon.leagueoflegends.com/api/versions.json', { cache: 'force-cache' });
+              if (!vr.ok) throw new Error('Version HTTP ' + vr.status);
+              const versions = await vr.json();
+              const version = versions && versions[0];
+              const res = await fetch(`${DEFAULT_DD_BASE}/${version}/data/en_US/champion.json`, { cache: 'force-cache' });
+              if (!res.ok) throw new Error('DDragon HTTP ' + res.status);
+              const json = await res.json();
+              if (alive) setState({ data: json, loading: false, error: null, version });
+            } catch (e) {
+              if (alive) setState(s => ({ ...s, loading: false, error: e?.message || 'Failed to load DDragon' }));
+            }
+          })();
+          return () => { alive = false };
+        }, []);
+        return state;
+      }
+
+      function resolveChampionImage(dd, inputName) {
+        if (!dd?.data) return null;
+        const direct = dd.data[inputName];
+        if (direct) return direct.image;
+        for (const k of Object.keys(dd.data)) {
+          const champ = dd.data[k];
+          if (champ?.name?.toLowerCase() === String(inputName).toLowerCase()) return champ.image;
+        }
+        return null;
+      }
+
+      // --- Icons (inline SVG) ---
+      const Icon = {
+        Search: (props) => React.createElement('svg', { viewBox: '0 0 24 24', width: 16, height: 16, fill: 'none', stroke: 'currentColor', strokeWidth: 2, ...props },
+          React.createElement('circle', { cx: 11, cy: 11, r: 8 }),
+          React.createElement('path', { d: 'M21 21l-4.3-4.3' })
+        ),
+        RefreshCw: (props) => React.createElement('svg', { viewBox: '0 0 24 24', width: 16, height: 16, fill: 'none', stroke: 'currentColor', strokeWidth: 2, ...props },
+          React.createElement('polyline', { points: '23 4 23 10 17 10' }),
+          React.createElement('polyline', { points: '1 20 1 14 7 14' }),
+          React.createElement('path', { d: 'M3.51 9a9 9 0 0114.85-3.36L23 10' }),
+          React.createElement('path', { d: 'M20.49 15A9 9 0 015.64 18.36L1 14' })
+        ),
+        Sliders: (props) => React.createElement('svg', { viewBox: '0 0 24 24', width: 16, height: 16, fill: 'none', stroke: 'currentColor', strokeWidth: 2, ...props },
+          React.createElement('line', { x1: 4, y1: 21, x2: 4, y2: 14 }),
+          React.createElement('line', { x1: 4, y1: 10, x2: 4, y2: 3 }),
+          React.createElement('line', { x1: 12, y1: 21, x2: 12, y2: 12 }),
+          React.createElement('line', { x1: 12, y1: 8, x2: 12, y2: 3 }),
+          React.createElement('line', { x1: 20, y1: 21, x2: 20, y2: 16 }),
+          React.createElement('line', { x1: 20, y1: 12, x2: 20, y2: 3 }),
+          React.createElement('line', { x1: 1, y1: 14, x2: 7, y2: 14 }),
+          React.createElement('line', { x1: 9, y1: 8, x2: 15, y2: 8 }),
+          React.createElement('line', { x1: 17, y1: 16, x2: 23, y2: 16 })
+        ),
+        Info: (props) => React.createElement('svg', { viewBox: '0 0 24 24', width: 16, height: 16, fill: 'none', stroke: 'currentColor', strokeWidth: 2, ...props },
+          React.createElement('circle', { cx: 12, cy: 12, r: 10 }),
+          React.createElement('line', { x1: 12, y1: 16, x2: 12, y2: 12 }),
+          React.createElement('line', { x1: 12, y1: 8, x2: 12, y2: 8 })
+        ),
+      };
+
+      // --- UI atoms ---
+      function Badge({ children }) { return React.createElement('span', { className: 'rounded-full bg-gray-100 text-gray-800 text-xs px-2 py-0.5' }, children); }
+      function Separator() { return React.createElement('hr', { className: 'border-t border-gray-200' }); }
+      function Card({ children }) { return React.createElement('div', { className: 'shadow-md rounded-2xl bg-white' }, children); }
+      function CardContent({ children, className='' }) { return React.createElement('div', { className: 'p-4 ' + className }, children); }
+      function Button({ children, onClick, disabled, variant='solid', size='md', title }) {
+        const base = 'inline-flex items-center justify-center rounded-2xl transition px-4 py-2';
+        const styles = variant==='outline' ? 'border border-gray-300 bg-white hover:bg-gray-50' : 'bg-black text-white hover:bg-gray-900';
+        const sz = size==='icon' ? 'w-10 h-10 p-0' : '';
+        return React.createElement('button', { className: base+' '+styles+' '+sz, onClick, disabled, title }, children);
+      }
+
+      function Slider({ min, max, step, value, onChange }) {
+        return React.createElement('input', { type: 'range', min, max, step, value, onChange: e => onChange(parseFloat(e.target.value)) });
+      }
+
+      // --- Champ icon from sprite ---
+      function ChampIcon({ dd, version, name, size = 48 }) {
+        const img = useMemo(() => resolveChampionImage(dd, name), [dd, name]);
+        if (!img) return React.createElement('div', { className: 'shrink-0 rounded-xl bg-gray-200', style: { width: size, height: size }, 'aria-label': name+' icon placeholder' });
+        const spriteUrl = `${DEFAULT_DD_BASE}/${version}/img/sprite/${img.sprite}`;
+        const scale = size !== img.w ? size / img.w : 1;
+        return React.createElement('div', {
+          className: 'shrink-0 rounded-xl pixel-snap',
+          style: {
+            width: img.w, height: img.h, backgroundImage: `url(${spriteUrl})`, backgroundRepeat: 'no-repeat',
+            backgroundPosition: `-${img.x}px -${img.y}px`, transform: scale !== 1 ? `scale(${scale})` : undefined, transformOrigin: 'top left'
+          }, 'aria-label': name + ' icon'
+        });
+      }
+
+      function ChampRow({ pair, dd, version }) {
+        const [name, score] = pair; const pct = (score * 100).toFixed(1);
+        const row = React.createElement('div', { className: 'flex items-center justify-between py-2 gap-3' },
+          React.createElement('div', { className: 'flex items-center gap-3' },
+            React.createElement(ChampIcon, { dd, version, name }),
+            React.createElement('span', null, name)
+          ),
+          React.createElement(Badge, null, pct + '%')
+        );
+        const content = [row, React.createElement(Separator, { key: 'sep' })];
+        return motion ? React.createElement(motion.div, { variants: itemVariants }, content) : React.createElement('div', null, content);
+      }
+
+      function Section({ title, items, dd, version }) {
+        return React.createElement(Card, null,
+          React.createElement(CardContent, null,
+            React.createElement('div', { className: 'flex items-center justify-between mb-2' },
+              React.createElement('h3', { className: 'font-semibold' }, title),
+              React.createElement(Badge, null, items.length)
+            ),
+            React.createElement(AnimatePresence || React.Fragment, null,
+              motion ? React.createElement(motion.div, { variants: listVariants, initial: 'hidden', animate: 'show' },
+                items.map((p) => React.createElement(ChampRow, { key: p[0]+'-'+p[1], pair: p, dd, version }))
+              ) : React.createElement('div', null,
+                items.map((p) => React.createElement(ChampRow, { key: p[0]+'-'+p[1], pair: p, dd, version }))
+              )
+            )
+          )
+        );
+      }
+
+      function App() {
+        const [champ, setChamp] = useState('Zed');
+        const [openAdvanced, setOpenAdvanced] = useState(false);
+        const [loading, setLoading] = useState(false);
+        const [data, setData] = useState(null);
+        const [high, setHigh] = useState(0.52);
+        const [low, setLow] = useState(0.48);
+
+        const { data: dd, loading: ddLoading, error: ddError, version } = useDDragon();
+
+        const run = useCallback(async (q) => {
+          setLoading(true);
+          try {
+            // Si se corre localmente, se puede cambiar la URL por http://127.0.0.1:8000/api/champion/${encodeURIComponent(q)}/counters
+            const res = await fetch(`https://summoner-counter-api.frative.com/champion/${encodeURIComponent(q)}/counters`, { cache: 'no-store' });
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const json = await res.json();
+            json.counters = (json.counters || []).filter(([name]) => !String(name).startsWith('SRU_'));
+            setData(json.counters);
+          } catch (e) {
+            setData(FALLBACK.counters);
+          } finally { setLoading(false); }
+        }, []);
+
+        useEffect(() => { run(champ); }, []);
+
+        const [debHigh, setDebHigh] = useState(high);
+        const [debLow, setDebLow] = useState(low);
+        const debouncedUpdate = useMemo(() => debounce((h, l) => { setDebHigh(h); setDebLow(l); }, 150), []);
+        useEffect(() => { debouncedUpdate(high, low); }, [high, low, debouncedUpdate]);
+
+        const buckets = useMemo(() => bucketize(data || [], debHigh, debLow), [data, debHigh, debLow]);
+
+        return React.createElement('div', { className: 'min-h-screen bg-white text-black flex flex-col items-center justify-start pt-16 space-y-8' },
+          React.createElement('div', { className: 'w-full max-w-2xl flex flex-col items-center space-y-4' },
+            React.createElement('h1', { className: 'text-3xl font-bold text-center' }, 'Search champion counters'),
+            React.createElement('p', { className: 'text-sm text-gray-600 text-center' }, 'Type a champion to see who counters them, who they go even against, and who they are strong against.'),
+            React.createElement('div', { className: 'flex w-full gap-2' },
+              React.createElement('input', {
+                value: champ,
+                onChange: (e) => setChamp(e.target.value),
+                placeholder: 'E.g. Zed',
+                className: 'flex-1 rounded-2xl border border-gray-300 px-3 py-2',
+                onKeyDown: (e) => { if (e.key === 'Enter') run(champ) }
+              }),
+              React.createElement(Button, { onClick: () => setOpenAdvanced(v=>!v), variant: 'outline', size: 'icon', title: 'Thresholds' }, React.createElement(Icon.Sliders, { className: 'w-4 h-4' })),
+              React.createElement(Button, { onClick: () => run(champ), size: 'icon', disabled: loading, title: 'Search' }, loading ? React.createElement(Icon.RefreshCw, { className: 'w-4 h-4 animate-spin' }) : React.createElement(Icon.Search, { className: 'w-4 h-4' }))
+            ),
+            openAdvanced && React.createElement('div', { className: 'w-full border rounded-lg p-4 space-y-3 bg-white' },
+              React.createElement('h4', { className: 'font-medium' }, 'Thresholds'),
+              React.createElement('div', null,
+                React.createElement('p', { className: 'text-xs' }, `Counter ≥ ${high.toFixed(2)}`),
+                React.createElement(Slider, { min: 0.50, max: 0.60, step: 0.005, value: high, onChange: (v) => setHigh(v) })
+              ),
+              React.createElement('div', null,
+                React.createElement('p', { className: 'text-xs' }, `Strong ≤ ${low.toFixed(2)}`),
+                React.createElement(Slider, { min: 0.40, max: 0.50, step: 0.005, value: low, onChange: (v) => setLow(v) })
+              )
+            )
+          ),
+          React.createElement('div', { className: 'w-full max-w-6xl space-y-4 px-4' },
+            React.createElement('p', { className: 'text-xs text-gray-600' }, 'Results for: ', champ),
+            React.createElement('div', { className: 'flex items-center gap-2 mt-1' },
+              React.createElement(Icon.Info, { className: 'w-4 h-4 text-gray-500' }),
+              React.createElement('span', { className: 'text-xs text-gray-500' }, 'The percentages represent the model\'s estimated probability that this champion will defeat your champion in a normal matchup.')
+            ),
+            React.createElement('div', { className: 'grid md:grid-cols-3 gap-4' },
+              React.createElement(Section, { title: 'You are strong against', items: buckets.strongs, dd, version }),
+              React.createElement(Section, { title: 'Even matchups', items: buckets.neutrals, dd, version }),
+              React.createElement(Section, { title: 'Counters (they beat you)', items: buckets.counters, dd, version })
+            )
+          )
+        );
+      }
+
+      const root = ReactDOM.createRoot(document.getElementById('root'));
+      root.render(React.createElement(App));
+    })();
+  </script>
+</body>
+</html>
